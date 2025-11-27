@@ -1,6 +1,6 @@
 import 'dart:io' show Platform;
-import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:flutter/material.dart';
 
@@ -23,11 +23,11 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Renk Avı',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      debugShowCheckedModeBanner: false,
       home: const ColorHuntPage(),
     );
   }
@@ -41,18 +41,15 @@ class ColorHuntPage extends StatefulWidget {
 }
 
 class _ColorHuntPageState extends State<ColorHuntPage> {
-  static const String kDefineBaseUrl = String.fromEnvironment('BASE_URL');
-  List<Map<String, dynamic>> levels = [];
-  int currentLevelIndex = 0;
-  String targetColor = 'red';
+  List<String> currentPalette = ['red', 'green', 'blue'];
+  String targetColor = 'blue';
+  Key gridKey = UniqueKey();
   late BannerAd _bannerAd;
-  bool _isBannerLoaded = false;
+  bool _bannerLoaded = false;
   InterstitialAd? _interstitialAd;
   int _correctCount = 0;
-  List<String> currentPalette = [];
 
   String get baseUrl {
-    if (kDefineBaseUrl.isNotEmpty) return kDefineBaseUrl;
     if (Platform.isAndroid) return 'http://10.0.2.2:3000';
     return 'http://localhost:3000';
   }
@@ -61,155 +58,88 @@ class _ColorHuntPageState extends State<ColorHuntPage> {
   void initState() {
     super.initState();
     if (Platform.isAndroid || Platform.isIOS) {
-      _loadBanner();
-      _loadInterstitial();
+      _bannerAd = BannerAd(
+        size: AdSize.banner,
+        adUnitId: 'ca-app-pub-3940256099942544/6300978111',
+        listener: BannerAdListener(
+          onAdLoaded: (_) => setState(() => _bannerLoaded = true),
+          onAdFailedToLoad: (_, __) => setState(() => _bannerLoaded = false),
+        ),
+        request: const AdRequest(),
+      )..load();
+      InterstitialAd.load(
+        adUnitId: 'ca-app-pub-3940256099942544/1033173712',
+        request: const AdRequest(),
+        adLoadCallback: InterstitialAdLoadCallback(
+          onAdLoaded: (ad) => _interstitialAd = ad,
+          onAdFailedToLoad: (_) => _interstitialAd = null,
+        ),
+      );
     }
     _fetchLevels();
   }
 
-  void _loadBanner() {
-    _bannerAd = BannerAd(
-      size: AdSize.banner,
-      adUnitId: 'ca-app-pub-3940256099942544/6300978111',
-      listener: BannerAdListener(
-        onAdLoaded: (_) => setState(() => _isBannerLoaded = true),
-        onAdFailedToLoad: (_, __) => setState(() => _isBannerLoaded = false),
-      ),
-      request: const AdRequest(),
-    )..load();
-  }
-
-  void _loadInterstitial() {
-    InterstitialAd.load(
-      adUnitId: 'ca-app-pub-3940256099942544/1033173712',
-      request: const AdRequest(),
-      adLoadCallback: InterstitialAdLoadCallback(
-        onAdLoaded: (ad) => _interstitialAd = ad,
-        onAdFailedToLoad: (_) => _interstitialAd = null,
-      ),
-    );
-  }
-
   Future<void> _fetchLevels() async {
-    final uri = Uri.parse('$baseUrl/api/color-hunt/levels');
     try {
-      final res = await http.get(uri).timeout(const Duration(seconds: 6));
+      final res = await http
+          .get(Uri.parse('$baseUrl/api/color-hunt/levels'))
+          .timeout(const Duration(seconds: 5));
       if (res.statusCode == 200) {
-        final data = jsonDecode(res.body) as List;
-        levels = data.map((e) => Map<String, dynamic>.from(e)).toList();
-        if (levels.isNotEmpty) {
-          _setupLevel(0);
+        final list = jsonDecode(res.body) as List;
+        if (list.isNotEmpty) {
+          final level = Map<String, dynamic>.from(list.first);
+          final palette = List<String>.from(jsonDecode(level['paletteJson']));
+          currentPalette = List<String>.from(palette)..shuffle();
+          targetColor = (List<String>.from(palette)..shuffle()).first;
+          setState(() {});
         }
-        setState(() {});
-        return;
       }
     } catch (_) {
-      // ignore
+      // sessiz geç
     }
-    // Fallback seviyeler
-    levels = [
-      {
-        'id': 1,
-        'speed': 1,
-        'colorsCount': 3,
-        'paletteJson': jsonEncode(['red', 'green', 'blue'])
-      },
-      {
-        'id': 2,
-        'speed': 2,
-        'colorsCount': 4,
-        'paletteJson': jsonEncode(['red', 'yellow', 'green', 'blue'])
-      },
-    ];
-    _setupLevel(0);
-    setState(() {});
   }
 
-  void _setupLevel(int index) {
-    currentLevelIndex = index;
-    final level = levels[index];
-    final palette = List<String>.from(jsonDecode(level['paletteJson']));
-    targetColor = (palette..shuffle()).first;
-    currentPalette = List<String>.from(palette)..shuffle();
-    debugPrint(
-        '[ColorHunt] setupLevel index=$index target=$targetColor palette=$palette');
+  void _onTapName(String name, int index) {
+    final correct = name == targetColor;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(correct ? 'Doğru!' : 'Tekrar dene'),
+        duration: const Duration(milliseconds: 800),
+      ),
+    );
+    _postEvent(correct);
+    if (!correct) return;
+    currentPalette = [...currentPalette.sublist(1), currentPalette.first];
+    gridKey = UniqueKey();
+    _correctCount++;
+    if (_interstitialAd != null && _correctCount % 3 == 0) {
+      _interstitialAd!.show();
+      _interstitialAd = null;
+      InterstitialAd.load(
+        adUnitId: 'ca-app-pub-3940256099942544/1033173712',
+        request: const AdRequest(),
+        adLoadCallback: InterstitialAdLoadCallback(
+          onAdLoaded: (ad) => _interstitialAd = ad,
+          onAdFailedToLoad: (_) => _interstitialAd = null,
+        ),
+      );
+    }
     setState(() {});
   }
 
   Future<void> _postEvent(bool correct) async {
-    final uri = Uri.parse('$baseUrl/api/color-hunt/events');
-    final body = {
-      'sessionId': 'local',
-      'anonymousId': 'anon',
-      'eventType': 'tap',
-      'payload': {
-        'correct': correct,
-      },
-    };
-    await http.post(uri,
-        headers: {'Content-Type': 'application/json'}, body: jsonEncode(body));
-  }
-
-  void _onTap(String color) async {
-    debugPrint('[ColorHunt] tap color=$color target=$targetColor');
-    final correct = color == targetColor;
-    await _postEvent(correct);
-    final snack = SnackBar(
-        content: Text(correct ? 'Doğru!' : 'Tekrar dene'),
-        duration: const Duration(milliseconds: 600));
-    ScaffoldMessenger.of(context).showSnackBar(snack);
-    if (correct) {
-      debugPrint('[ColorHunt] correct tap');
-      _correctCount++;
-      if (_interstitialAd != null && _correctCount % 3 == 0) {
-        _interstitialAd!.show();
-        _interstitialAd = null;
-        _loadInterstitial();
-      }
-      // Konumu garanti değiştir: bir adım sağa döndür
-      if (currentPalette.isNotEmpty) {
-        currentPalette = [
-          ...currentPalette.sublist(1),
-          currentPalette.first,
-        ];
-      }
-      debugPrint('[ColorHunt] palette rotated: $currentPalette');
-      setState(() {});
-    }
-  }
-
-  List<Widget> _shapeGrid() {
-    if (levels.isEmpty) {
-      return [
-        const Padding(
-          padding: EdgeInsets.all(12.0),
-          child: Text('Yükleniyor...'),
-        ),
-        TextButton(onPressed: _fetchLevels, child: const Text('Tekrar Dene')),
-      ];
-    }
-    final level = levels[currentLevelIndex];
-    debugPrint('[ColorHunt] shapeGrid palette=$currentPalette');
-    return List.generate(currentPalette.length, (i) {
-      final name = currentPalette[i];
-      final color = _parseColor(name);
-      return GestureDetector(
-        key: ValueKey('$name-$i-$currentLevelIndex-$_correctCount'),
-        onTap: () => _onTap(name),
-        child: AnimatedContainer(
-          duration: Duration(milliseconds: 200 + (level['speed'] as int) * 50),
-          margin: const EdgeInsets.all(8),
-          width: 80,
-          height: 80,
-          decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-              boxShadow: const [
-                BoxShadow(blurRadius: 6, color: Colors.black26)
-              ]),
-        ),
+    try {
+      await http.post(
+        Uri.parse('$baseUrl/api/color-hunt/events'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'sessionId': 'local',
+          'anonymousId': 'anon',
+          'eventType': 'tap',
+          'payload': {'correct': correct},
+        }),
       );
-    });
+    } catch (_) {}
   }
 
   Color _parseColor(String name) {
@@ -229,40 +159,6 @@ class _ColorHuntPageState extends State<ColorHuntPage> {
     }
   }
 
-  String _colorName(Color c) {
-    if (c == Colors.red) return 'red';
-    if (c == Colors.green) return 'green';
-    if (c == Colors.blue) return 'blue';
-    if (c == Colors.yellow) return 'yellow';
-    if (c == Colors.purple) return 'purple';
-    return 'grey';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(_instructionText().toUpperCase())),
-      body: Column(
-        children: [
-          Expanded(
-            child: Center(
-              child: Wrap(
-                alignment: WrapAlignment.center,
-                children: _shapeGrid(),
-              ),
-            ),
-          ),
-          if (_isBannerLoaded && (Platform.isAndroid || Platform.isIOS))
-            SizedBox(
-              height: _bannerAd.size.height.toDouble(),
-              width: _bannerAd.size.width.toDouble(),
-              child: AdWidget(ad: _bannerAd),
-            ),
-        ],
-      ),
-    );
-  }
-
   String _instructionText() {
     switch (targetColor) {
       case 'red':
@@ -278,5 +174,50 @@ class _ColorHuntPageState extends State<ColorHuntPage> {
       default:
         return 'Rengi Bul!';
     }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(_instructionText())),
+      body: Column(
+        children: [
+          Expanded(
+            child: Center(
+              child: Row(
+                key: gridKey,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(currentPalette.length, (i) {
+                  final name = currentPalette[i];
+                  final color = _parseColor(name);
+                  return GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => _onTapName(name, i),
+                    child: Container(
+                      margin: const EdgeInsets.all(12),
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        color: color,
+                        shape: BoxShape.circle,
+                        boxShadow: const [
+                          BoxShadow(blurRadius: 6, color: Colors.black26),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ),
+          ),
+          if (_bannerLoaded && (Platform.isAndroid || Platform.isIOS))
+            SizedBox(
+              height: _bannerAd.size.height.toDouble(),
+              width: _bannerAd.size.width.toDouble(),
+              child: AdWidget(ad: _bannerAd),
+            ),
+        ],
+      ),
+    );
   }
 }
