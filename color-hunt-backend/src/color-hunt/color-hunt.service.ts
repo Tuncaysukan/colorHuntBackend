@@ -44,7 +44,7 @@ export class ColorHuntService implements OnModuleInit {
       const ev = repo.create({
         sessionId: payload.sessionId ?? 'unknown',
         anonymousId: payload.anonymousId ?? 'anon',
-        gameId: 'color_hunt',
+        gameId: payload.gameId ?? 'color_hunt',
         eventType: payload.eventType ?? 'tap',
         payload: payload.payload ?? {},
         ts: payload.ts ? new Date(payload.ts) : new Date(),
